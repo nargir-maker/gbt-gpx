@@ -1,0 +1,66 @@
+# Writes gpx_dates.json: for every .gpx file, the date its content last
+# changed (upload or replacement). Read by the Greek Brevets Tracker app to
+# show "Διαδρομή ενημερώθηκε ..." on each brevet.
+#
+# Renaming an old file away and uploading a new one under the same name
+# gives the new upload's date — the history is tracked per file name, not
+# followed through renames.
+
+name: GPX dates
+
+on:
+  push:
+    branches: [main]
+    paths: ['**.gpx']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gpx-dates
+  cancel-in-progress: false
+
+jobs:
+  dates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build gpx_dates.json
+        run: |
+          python3 - <<'EOF'
+          import json, subprocess
+
+          def git(*args):
+              return subprocess.check_output(['git', *args]).decode('utf-8')
+
+          files = {}
+          for path in git('ls-files', '-z', '--', '*.gpx').split('\0'):
+              if not path:
+                  continue
+              # Last commit that changed this exact path (no --follow).
+              date = git('log', '-1', '--format=%cI', '--', path).strip()
+              if date:
+                  files[path] = date
+
+          with open('gpx_dates.json', 'w', encoding='utf-8') as f:
+              json.dump({'files': dict(sorted(files.items()))}, f,
+                        ensure_ascii=False, indent=1)
+              f.write('\n')
+          print(f'{len(files)} gpx files')
+          EOF
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898700+github-actions[bot]@users.noreply.github.com"
+          git add gpx_dates.json
+          if git diff --cached --quiet; then
+            echo "gpx_dates.json unchanged"
+          else
+            git commit -m "Update gpx_dates.json"
+            git push
+          fi
